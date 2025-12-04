@@ -1,0 +1,25 @@
+[package]
+name = "libloader"
+version = "0.0.1"
+edition = "2024"
+
+[lib]
+name = "loader"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "test_loader"
+path = "src/bin/test_loader.rs"
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+
+[profile.dev]
+panic = "abort"
+
+[dependencies]
+goblin = { version = "0.10", default-features = false, features = ["mach64"] }
+libc = "0.2.177"
+mach-sys = "0.5.4"
