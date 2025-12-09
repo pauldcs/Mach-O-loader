@@ -1,3 +1,5 @@
+use core::slice;
+
 use goblin::mach::{Mach, cputype::CPU_TYPE_ARM64};
 
 mod room;
@@ -46,8 +48,7 @@ impl UnsafeView {
 ///
 /// # Safety
 /// Nothing is safe
-pub extern "C" fn execvm(ptr: *const u8, len: usize) -> ErrCode {
-    // Wrap the raw pointer and length.
+pub extern "C" fn execvm(ptr: *const u8, len: usize, name: *const u8, name_len: usize) -> ErrCode {
     let unsafe_view = UnsafeView::new(ptr, len);
 
     if unsafe_view.is_null() {
@@ -66,7 +67,12 @@ pub extern "C" fn execvm(ptr: *const u8, len: usize) -> ErrCode {
 
     match Mach::parse(__bytes__) {
         Ok(Mach::Binary(macho)) => unsafe {
-            room::exec_jit(&macho, __bytes__)
+            let name = match str::from_utf8(slice::from_raw_parts(name, name_len)) {
+                Ok(v) => v.to_string(),
+                Err(_) => panic!("Invalid UTF-8"),
+            };
+
+            room::exec_jit(&macho, __bytes__, name)
                 .err()
                 .unwrap_or(ErrCode::OK)
         },
@@ -76,7 +82,7 @@ pub extern "C" fn execvm(ptr: *const u8, len: usize) -> ErrCode {
             .and_then(|arch| arch)
             .map(|arch| {
                 let slice = arch.slice(__bytes__);
-                execvm(slice.as_ptr(), slice.len())
+                execvm(slice.as_ptr(), slice.len(), name, name_len)
             })
             .unwrap_or(ErrCode::EARCH),
         Err(_) => ErrCode::EINVAL,

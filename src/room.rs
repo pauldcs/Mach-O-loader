@@ -1,4 +1,7 @@
-use std::{ffi::CStr, ptr::NonNull};
+use std::{
+    ffi::{CStr, CString},
+    ptr::NonNull,
+};
 
 use goblin::mach::{
     MachO,
@@ -261,10 +264,15 @@ impl<'a> Room<'a> {
         dbg!(self.macho.imports().unwrap());
     }
 
-    pub fn jump_to_entry(&self) {
-        let mut bytes = vec![b"/bin/ls\0".to_vec()];
-        let argc = bytes.len();
+    pub fn jump_to_entry(&self, prog_name: String) {
+        let mut bytes = vec![
+            CString::new(prog_name)
+                .unwrap()
+                .as_bytes_with_nul()
+                .to_vec(),
+        ];
 
+        let argc = bytes.len();
         unsafe {
             let mut envp = *_NSGetEnviron();
             while !(*envp).is_null() {
@@ -298,7 +306,7 @@ impl<'a> Room<'a> {
     }
 }
 
-pub unsafe fn exec_jit(macho: &MachO<'_>, bytes: &[u8]) -> Result<(), ErrCode> {
+pub unsafe fn exec_jit(macho: &MachO<'_>, bytes: &[u8], prog_name: String) -> Result<(), ErrCode> {
     let mut room = Room::new(bytes, macho);
 
     room.dylibs_load_in();
@@ -310,7 +318,7 @@ pub unsafe fn exec_jit(macho: &MachO<'_>, bytes: &[u8]) -> Result<(), ErrCode> {
 
     room.segments_protection_apply();
 
-    room.jump_to_entry();
+    room.jump_to_entry(prog_name);
 
     Ok(())
 }
