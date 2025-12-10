@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 use libc::mach_vm_address_t;
 use mach_sys::{
     kern_return, mach_types,
@@ -8,29 +10,50 @@ use mach_sys::{
 /// Error type for VM operations
 #[derive(Debug)]
 pub enum VmError {
-    AllocationFailed(kern_return::kern_return_t),
-    MemWrite(kern_return::kern_return_t),
-    DeallocationFailed(kern_return::kern_return_t),
-    TaskForPidFailed(kern_return::kern_return_t),
-    ProtectFailed(kern_return::kern_return_t),
-    GetProtectionFailed(kern_return::kern_return_t),
+    AllocError(kern_return::kern_return_t),
+    WriteFault(kern_return::kern_return_t),
+    DeallocError(kern_return::kern_return_t),
+    TaskGetError(kern_return::kern_return_t),
+    ProtectError(kern_return::kern_return_t),
+    ProtectionQueryError(kern_return::kern_return_t),
 }
 
 impl std::fmt::Display for VmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VmError::AllocationFailed(code) => {
-                write!(f, "VM allocation failed with code: {}", code)
+            VmError::AllocError(code) => write!(
+                f,
+                "failed to allocate virtual memory (kern_return: {})",
+                code
+            ),
+
+            VmError::DeallocError(code) => write!(
+                f,
+                "failed to deallocate virtual memory region (kern_return: {})",
+                code
+            ),
+
+            VmError::WriteFault(code) => {
+                write!(f, "memory write operation failed (kern_return: {})", code)
             }
-            VmError::DeallocationFailed(code) => {
-                write!(f, "VM deallocation failed with code: {}", code)
-            }
-            VmError::MemWrite(code) => {
-                write!(f, "memory write error: {}", code)
-            }
-            VmError::TaskForPidFailed(code) => write!(f, "task_for_pid failed with code: {}", code),
-            VmError::ProtectFailed(code) => write!(f, "VM protect failed with code: {}", code),
-            VmError::GetProtectionFailed(code) => write!(f, "get VM protection failed: {}", code),
+
+            VmError::TaskGetError(code) => write!(
+                f,
+                "failed to obtain task port via task_for_pid (kern_return: {})",
+                code
+            ),
+
+            VmError::ProtectError(code) => write!(
+                f,
+                "failed to change virtual memory protection (kern_return: {})",
+                code
+            ),
+
+            VmError::ProtectionQueryError(code) => write!(
+                f,
+                "failed to query virtual memory protection (kern_return: {})",
+                code
+            ),
         }
     }
 }
@@ -44,7 +67,7 @@ pub unsafe fn self_task_get() -> Result<mach_types::task_t, VmError> {
             &mut task,
         ) {
             mach_sys::kern_return::KERN_SUCCESS => Ok(task),
-            kern_return => Err(VmError::TaskForPidFailed(kern_return)),
+            kern_return => Err(VmError::TaskGetError(kern_return)),
         }
     }
 }
@@ -56,19 +79,15 @@ pub unsafe fn copy_from_image(
     count: usize,
 ) -> Result<(), VmError> {
     unsafe {
-        let kern_return =
-            mach_sys::vm::mach_vm_write(task, dst, src.try_into().unwrap(), count as u32);
+        let kern_return = mach_sys::vm::mach_vm_write(task, dst, src as usize, count as u32);
         match kern_return {
             mach_sys::kern_return::KERN_SUCCESS => Ok(()),
-            _ => Err(VmError::MemWrite(kern_return)),
+            _ => Err(VmError::WriteFault(kern_return)),
         }
     }
 }
 
-pub unsafe fn memory_alloc(
-    size: usize,
-    task: mach_types::task_t,
-) -> Result<std::ptr::NonNull<u8>, VmError> {
+pub unsafe fn memory_alloc(size: usize, task: mach_types::task_t) -> Result<NonNull<u8>, VmError> {
     let mut addr = 0;
     let kern_return = unsafe {
         mach_sys::vm::mach_vm_allocate(
@@ -80,14 +99,14 @@ pub unsafe fn memory_alloc(
     };
     match kern_return {
         mach_sys::kern_return::KERN_SUCCESS => {
-            std::ptr::NonNull::new(addr as *mut u8).ok_or(VmError::AllocationFailed(kern_return))
+            NonNull::new(addr as *mut u8).ok_or(VmError::AllocError(kern_return))
         }
-        _ => Err(VmError::AllocationFailed(kern_return)),
+        _ => Err(VmError::AllocError(kern_return)),
     }
 }
 
 pub unsafe fn memory_dealloc(
-    ptr: std::ptr::NonNull<u8>,
+    ptr: NonNull<u8>,
     size: usize,
     task: mach_types::task_t,
 ) -> Result<(), VmError> {
@@ -101,7 +120,7 @@ pub unsafe fn memory_dealloc(
 
     match kern_return {
         mach_sys::kern_return::KERN_SUCCESS => Ok(()),
-        _ => Err(VmError::DeallocationFailed(kern_return)),
+        _ => Err(VmError::DeallocError(kern_return)),
     }
 }
 
@@ -113,7 +132,7 @@ pub fn memory_check_protection(
     unsafe {
         let mut size = 0x10;
         let mut object_name = 0;
-        #[allow(clippy::fn_to_numeric_cast)]
+
         let mut address = addr as mach_vm_address_t;
         let mut info: vm_region_basic_info_64 = std::mem::zeroed();
         let mut info_size = vm_region_basic_info_64::count();
@@ -130,7 +149,7 @@ pub fn memory_check_protection(
 
         match kern_return {
             mach_sys::kern_return::KERN_SUCCESS => Ok(info.protection == prot),
-            _ => Err(VmError::GetProtectionFailed(kern_return)),
+            _ => Err(VmError::ProtectionQueryError(kern_return)),
         }
     }
 }
@@ -145,14 +164,14 @@ pub unsafe fn memory_protection_set(
     unsafe {
         let kern_return = mach_sys::vm::mach_vm_protect(
             task,
-            ptr.as_ptr() as vm_types::mach_vm_address_t,
+            ptr.as_ptr().addr() as vm_types::mach_vm_address_t,
             size as vm_types::mach_vm_size_t,
             max_protection,
             protection,
         );
         match kern_return {
             mach_sys::kern_return::KERN_SUCCESS => Ok(()),
-            _ => Err(VmError::ProtectFailed(kern_return)),
+            _ => Err(VmError::ProtectError(kern_return)),
         }
     }
 }

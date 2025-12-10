@@ -15,7 +15,6 @@ use mach_sys::{
 };
 
 use crate::{
-    ErrCode,
     utilities::{segment_name_eq, vm_prot_into_string},
     vm,
 };
@@ -142,7 +141,7 @@ impl<'a> Room<'a> {
             }
 
             eprintln!(
-                "{:>15}: path: {}: loaded at address {:x?}",
+                "{:>15}: {}: loaded at address {:x?}",
                 "init-dylib",
                 self.get_dylib_name_from_offset(load_command_offset, name_offset),
                 handle
@@ -166,7 +165,7 @@ impl<'a> Room<'a> {
         }
     }
 
-    pub fn segments_load_in(&self) {
+    pub fn segments_initialize(&self) {
         self.macho.segments.iter().for_each(
             |Segment {
                  fileoff: image_src_offset,
@@ -186,11 +185,11 @@ impl<'a> Room<'a> {
                 };
 
                 eprintln!(
-                    "{:>15}: name: {}: size: {}KB [image 0x{image_src_offset:010x}] mapped @ [vm 0x{vm_dst_offset:010x}] ~ [vm 0x{:010x}]",
+                    "{:>15}: {}: {}KB [image 0x{image_src_offset:010x}] mapped @ [vm 0x{vm_dst_offset:010x}] ~ [vm 0x{:010x}]",
                     "init-segment",
                     String::from_utf8(segment_name.to_vec()).unwrap(),
                     copy_size / 1024,
-                    vm_dst_offset + (*copy_size as u64),
+                    vm_dst_offset + *copy_size,
                 );
             },
         );
@@ -206,7 +205,7 @@ impl<'a> Room<'a> {
                  initprot,
                  ..
              }| {
-                if segment_name_eq(&segment_name, "__PAGEZERO") {
+                if segment_name_eq(segment_name, "__PAGEZERO") {
                     return;
                 }
 
@@ -225,7 +224,7 @@ impl<'a> Room<'a> {
                     });
 
                     eprintln!(
-                        "{:>15}: enable protection init={} max={} @ [vm {:x?}] ",
+                        "{:>15}: enable protection {}/{} @ [vm {:x?}] ",
                         "vm-protect",
                         vm_prot_into_string(*initprot as i32),
                         vm_prot_into_string(*maxprot as i32),
@@ -244,7 +243,7 @@ impl<'a> Room<'a> {
     pub fn assert_protection(&self, addr: u64, prot: i32) {
         match vm::memory_check_protection(self.task, addr, prot) {
             Ok(true) => eprintln!(
-                "{:>15}: [vm 0x{addr:x?}] {} is enabled, check ok",
+                "{:>15}: [vm 0x{addr:x?}] {} is enabled",
                 "vm-check",
                 vm_prot_into_string(prot)
             ),
@@ -260,28 +259,24 @@ impl<'a> Room<'a> {
         };
     }
 
-    pub fn show_imports(&self) {
-        dbg!(self.macho.imports().unwrap());
-    }
-
-    pub fn jump_to_entry(&self, prog_name: String) {
-        let mut bytes = vec![
+    pub fn jump_to_entry(&self, prog_name: String) -> ! {
+        let mut program_arguments = vec![
             CString::new(prog_name)
                 .unwrap()
                 .as_bytes_with_nul()
                 .to_vec(),
         ];
 
-        let argc = bytes.len();
+        let argc = program_arguments.len();
         unsafe {
             let mut envp = *_NSGetEnviron();
             while !(*envp).is_null() {
-                bytes.push(CStr::from_ptr(*envp).to_bytes_with_nul().to_vec());
+                program_arguments.push(CStr::from_ptr(*envp).to_bytes_with_nul().to_vec());
                 envp = envp.add(1);
             }
 
             let argv: Vec<*const u8> = std::iter::once(argc as *const u8)
-                .chain(bytes.iter().map(Vec::as_ptr))
+                .chain(program_arguments.iter().map(Vec::as_ptr))
                 .collect();
 
             let entry_address = self.vm.add(self.macho.entry as usize);
@@ -293,32 +288,26 @@ impl<'a> Room<'a> {
 
             self.assert_protection(
                 entry_address.as_ptr().addr() as u64,
-                (VM_PROT_READ | VM_PROT_EXECUTE) as i32,
+                VM_PROT_READ | VM_PROT_EXECUTE,
             );
 
-            eprintln!(
-                "{:>15}: jumping to entry point *{entry_address:x?} ...",
-                "done"
-            );
+            eprintln!("{:>15}: jumping to {entry_address:x?} ...", "done");
 
             entry_fn(argc, argv.as_ptr(), envp as *const *const u8);
+
+            std::process::exit(0)
         }
     }
 }
 
-pub unsafe fn exec_jit(macho: &MachO<'_>, bytes: &[u8], prog_name: String) -> Result<(), ErrCode> {
-    let mut room = Room::new(bytes, macho);
+pub unsafe fn exec_jit(macho: &MachO<'_>, image: &[u8], name: String) -> ! {
+    let mut exec_room = Room::new(image, macho);
 
-    room.dylibs_load_in();
+    exec_room.dylibs_load_in();
 
-    room.segments_load_in();
+    exec_room.segments_initialize();
 
-    room.show_imports();
-    //room.handle_load_command_dyld_chained_fixups(linkedit, dylib_names);
+    exec_room.segments_protection_apply();
 
-    room.segments_protection_apply();
-
-    room.jump_to_entry(prog_name);
-
-    Ok(())
+    exec_room.jump_to_entry(name);
 }

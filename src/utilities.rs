@@ -12,5 +12,6 @@ pub fn vm_prot_into_string(prot: vm_prot_t) -> String {
     } else {
         "-"
     };
-    return format!("({is_r}{is_w}{is_x})");
+
+    format!("({is_r}{is_w}{is_x})")
 }

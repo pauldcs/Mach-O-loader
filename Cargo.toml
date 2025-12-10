@@ -8,8 +8,8 @@ name = "loader"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "test_loader"
-path = "src/bin/test_loader.rs"
+name = "loader"
+path = "src/bin/main.rs"
 
 [profile.release]
 opt-level = "z"
@@ -21,5 +21,5 @@ panic = "abort"
 
 [dependencies]
 goblin = { version = "0.10", default-features = false, features = ["mach64"] }
-libc = "0.2.177"
+libc = "0.2.178"
 mach-sys = "0.5.4"
