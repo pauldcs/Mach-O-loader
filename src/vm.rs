@@ -3,6 +3,9 @@ use std::ptr::NonNull;
 use libc::mach_vm_address_t;
 use mach_sys::{
     kern_return, mach_types,
+    vm_attributes::{
+        MATTR_CACHE, MATTR_VAL_CACHE_FLUSH, vm_machine_attribute_t, vm_machine_attribute_val_t,
+    },
     vm_region::{VM_REGION_BASIC_INFO_64, vm_region_basic_info_64, vm_region_info_t},
     vm_types,
 };
@@ -16,44 +19,42 @@ pub enum VmError {
     TaskGetError(kern_return::kern_return_t),
     ProtectError(kern_return::kern_return_t),
     ProtectionQueryError(kern_return::kern_return_t),
+    MachineAttributeError(kern_return::kern_return_t),
 }
 
 impl std::fmt::Display for VmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VmError::AllocError(code) => write!(
-                f,
-                "failed to allocate virtual memory (kern_return: {})",
-                code
-            ),
+            VmError::AllocError(code) => {
+                write!(f, "failed to allocate virtual memory (kern_return: {code})",)
+            }
 
             VmError::DeallocError(code) => write!(
                 f,
-                "failed to deallocate virtual memory region (kern_return: {})",
-                code
+                "failed to deallocate virtual memory region (kern_return: {code})",
             ),
 
             VmError::WriteFault(code) => {
-                write!(f, "memory write operation failed (kern_return: {})", code)
+                write!(f, "memory write operation failed (kern_return: {code})",)
             }
 
             VmError::TaskGetError(code) => write!(
                 f,
-                "failed to obtain task port via task_for_pid (kern_return: {})",
-                code
+                "failed to obtain task port via task_for_pid (kern_return: {code})",
             ),
 
             VmError::ProtectError(code) => write!(
                 f,
-                "failed to change virtual memory protection (kern_return: {})",
-                code
+                "failed to change virtual memory protection (kern_return: {code})",
             ),
 
             VmError::ProtectionQueryError(code) => write!(
                 f,
-                "failed to query virtual memory protection (kern_return: {})",
-                code
+                "failed to query virtual memory protection (kern_return: {code})",
             ),
+            VmError::MachineAttributeError(code) => {
+                write!(f, "failed to set machine attributes (kern_return: {code})",)
+            }
         }
     }
 }
@@ -173,5 +174,22 @@ pub unsafe fn memory_protection_set(
             mach_sys::kern_return::KERN_SUCCESS => Ok(()),
             _ => Err(VmError::ProtectError(kern_return)),
         }
+    }
+}
+
+pub unsafe fn flush_cache_at_address(
+    task: mach_types::task_t,
+    address: vm_types::mach_vm_address_t,
+    size: vm_types::mach_vm_size_t,
+) -> Result<(), VmError> {
+    let mut mattr_value: vm_machine_attribute_val_t = MATTR_VAL_CACHE_FLUSH;
+
+    let kern_return = unsafe {
+        mach_sys::vm::mach_vm_machine_attribute(task, address, size, MATTR_CACHE, &mut mattr_value)
+    };
+
+    match kern_return {
+        mach_sys::kern_return::KERN_SUCCESS => Ok(()),
+        _ => Err(VmError::MachineAttributeError(kern_return)),
     }
 }
