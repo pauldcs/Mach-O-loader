@@ -3,10 +3,12 @@
 version = 4
 
 [[package]]
-name = "fastrand"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+name = "execvm"
+version = "0.0.1"
+dependencies = [
+ "goblin",
+ "libc",
+]
 
 [[package]]
 name = "goblin"
@@ -26,28 +28,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
-name = "libloader"
-version = "0.0.1"
-dependencies = [
- "goblin",
- "libc",
- "mach-sys",
-]
-
-[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
-
-[[package]]
-name = "mach-sys"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48460c2e82a3a0de197152fdf8d2c2d5e43adc501501553e439bf2156e6f87c7"
-dependencies = [
- "fastrand",
-]
 
 [[package]]
 name = "plain"

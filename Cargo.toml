@@ -1,5 +1,5 @@
 [package]
-name = "libloader"
+name = "execvm"
 version = "0.0.1"
 edition = "2024"
 
@@ -20,6 +20,5 @@ lto = true
 panic = "abort"
 
 [dependencies]
-goblin = { version = "0.10", default-features = false, features = ["mach64"] }
+goblin = { version = "0.10", default-features = false, features = ["mach64"]  }
 libc = "0.2.178"
-mach-sys = "0.5.4"
