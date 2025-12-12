@@ -8,13 +8,13 @@ fn main() {
         panic!("failed to read {bin}: {}", e);
     });
 
-    let mut address_space = unsafe { Task::with_pointer(data.as_ptr(), data.len()) };
+    let mut task = unsafe { Task::with_pointer(data.as_ptr(), data.len()) };
 
-    address_space.segments_protect();
+    task.segments_protect();
 
     let mut linker = Linker::new();
 
-    linker.link_raw(&mut address_space);
+    linker.link_raw(&mut task);
 
-    jumper(address_space.memory, address_space.entry_point);
+    jumper(task.memory, task.entry_point);
 }

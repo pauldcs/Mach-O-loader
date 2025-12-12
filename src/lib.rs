@@ -1,5 +1,4 @@
-use core::fmt;
-use std::{collections::HashMap, ptr::NonNull};
+use std::ptr::NonNull;
 
 use goblin::mach::{
     Mach, MachO,
@@ -15,18 +14,14 @@ pub mod mach;
 
 /// A mach task_t
 ///
-/// This is a wrapper around the C.
+/// This is a wrapper around a mach_port_t.
 /// Because we are not in the kernel, a task is represented by
 /// this port.
 ///
 /// defined in "mach/mach_types.h"
 pub type MachPort = libc::mach_port_t;
 
-/// A segment, made up of zero or more sections. This
-/// partially wraps the segment_command_64 as defined in
-/// "mach-o/loader.h"
-///
-/// The segments indicates mappings in the task's address space.
+#[derive(Debug)]
 pub struct Segment {
     /// flags
     flags: u32,
@@ -56,28 +51,6 @@ pub struct Segment {
     initprot: i32,
 }
 
-impl fmt::Debug for Segment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Segment")
-            .field("flags", &format_args!("0x{:08x}", self.flags))
-            .field("name", &format_args!("'{}'", self.name))
-            .field("offset", &format_args!("0x{:x}", self.offset))
-            .field("vm_addr", &format_args!("0x{:x}", self.vm_addr))
-            .field(
-                "vm_size",
-                &format_args!("0x{:x} ({} bytes)", self.vm_size, self.vm_size),
-            )
-            .field(
-                "size",
-                &format_args!("0x{:x} ({} bytes)", self.size, self.size),
-            )
-            .field("maxprot", &vm_prot_into_string(self.maxprot))
-            .field("initprot", &vm_prot_into_string(self.initprot))
-            .field("sections", &self.sections)
-            .finish()
-    }
-}
-
 /// Returns the `vm_prot_t` as a human readable string.
 pub fn vm_prot_into_string(prot: libc::vm_prot_t) -> String {
     format!(
@@ -100,6 +73,7 @@ pub fn vm_prot_into_string(prot: libc::vm_prot_t) -> String {
     )
 }
 
+#[derive(Debug)]
 /// Wrapper around a partial section_64 as
 /// defined in "mach-o/loader.h"
 pub struct Section {
@@ -121,31 +95,15 @@ pub struct Section {
     align: usize,
 }
 
-impl fmt::Debug for Section {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Section")
-            .field("flags", &format_args!("0x{:08x}", self.flags))
-            .field("name", &format_args!("'{}'", self.name))
-            .field("offset", &format_args!("0x{:x}", self.offset))
-            .field("vm_addr", &format_args!("0x{:x}", self.vm_addr))
-            .field(
-                "vm_size",
-                &format_args!("0x{:x} ({} bytes)", self.vm_size, self.vm_size),
-            )
-            .field(
-                "align",
-                &format_args!("2^{} ({} bytes)", self.align, 1usize << self.align),
-            )
-            .finish()
-    }
-}
-
+#[derive(Debug)]
 /// A wrapper around the tasks address space
 pub struct Task {
     /// the tasks virtual memory
     pub memory: NonNull<u8>,
 
-    pub dylibs: HashMap<String, u64>,
+    pub dylibs: Vec<(String, u64)>,
+
+    pub symbols: Vec<(String, u64)>,
 
     /// the tasks virtual memory size
     memory_size: usize,
@@ -166,41 +124,25 @@ impl Drop for Task {
     }
 }
 
-impl fmt::Debug for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = f.debug_struct("Task");
-
-        debug.field("memory", &format_args!("{:p}", self.memory.as_ptr()));
-        debug.field("segments", &self.segments);
-        debug.field("dylibs", &self.dylibs);
-
-        if self.entry_point == 0 {
-            debug.field("entry_point", &"None");
-        } else {
-            debug.field("entry_point", &format_args!("0x{:x}", self.entry_point));
-        }
-
-        debug.finish()
-    }
+#[inline]
+pub fn get_library_ordinal(n_desc: u32) -> u8 {
+    ((n_desc >> 8) & 0xff) as u8
 }
 
 impl Task {
     /// Creates a task given a pointer and a len
-    ///
-    /// # Safety
-    /// the caller must make sure ptr and len are valid for
-    /// the image loaded from the file
     pub unsafe fn with_pointer(ptr: *const u8, len: usize) -> Self {
         unsafe { task_init(ptr, len) }
     }
 }
 
+const RTLD_LAZY: libc::c_int = 0x1;
+const RTLD_NOW: libc::c_int = 0x2;
+const RTLD_LOCAL: libc::c_int = 0x4;
+const RTLD_GLOBAL: libc::c_int = 0x8; // rarely correct to use
+
 impl Task {
     /// Applies memory protection to all segments in the address space.
-    ///
-    /// Iterates over each segment and calls `vm_protect` twice:
-    /// once for the current protection and once for the maximum protection,
-    /// setting the segment's initial protection flags.
     pub fn segments_protect(&mut self) {
         self.segments.iter().for_each(|segment| unsafe {
             [false, true].into_iter().for_each(|max| {
@@ -214,9 +156,33 @@ impl Task {
         });
     }
 
-    pub fn dylibs_search(&mut self, macho: &MachO, base_addr: &[u8]) /*-> *mut libc::c_void*/
-    {
-        let mut dylibs: HashMap<String, u64> = HashMap::new();
+    pub fn symbols_init(&mut self, macho: &MachO) {
+        let mut symbols = Vec::<(String, u64)>::new();
+        for symbol in macho.symbols() {
+            let (name, nlist) = symbol.unwrap();
+
+            /* NLIST_TYPE_LOCAL */
+            if nlist.n_type == 1 {
+                // remove the trailing '_'
+                let lib = get_library_ordinal(nlist.n_desc as u32);
+                let (_, lib_handle) = &self.dylibs[(lib - 1) as usize];
+                let name = &name[1..name.len()];
+                let new_pointer = unsafe {
+                    libc::dlsym(*lib_handle as *mut libc::c_void, name.as_ptr() as *const i8)
+                };
+
+                if new_pointer.is_null() {
+                    panic!("failed to init: {name}");
+                }
+
+                symbols.push((name[1..name.len()].to_string(), new_pointer.addr() as u64));
+            }
+        }
+        self.symbols = symbols;
+    }
+
+    pub fn dylibs_search(&mut self, macho: &MachO, base_addr: &[u8]) {
+        let mut dylibs: Vec<(String, u64)> = Vec::new();
 
         for LoadCommand {
             offset: load_command_offset,
@@ -230,6 +196,16 @@ impl Task {
                 | CommandVariant::ReexportDylib(DylibCommand { dylib, .. })
                 | CommandVariant::LoadWeakDylib(DylibCommand { dylib, .. })
                 | CommandVariant::LazyLoadDylib(DylibCommand { dylib, .. }) => {
+                    let (flags, _is_weak) = match command {
+                        CommandVariant::LazyLoadDylib(_) => (RTLD_LAZY | RTLD_LOCAL, false),
+                        CommandVariant::LoadWeakDylib(_) => (RTLD_LAZY | RTLD_LOCAL, true),
+                        CommandVariant::ReexportDylib(_) => (RTLD_NOW | RTLD_LOCAL, false),
+                        CommandVariant::LoadUpwardDylib(_) => (RTLD_NOW | RTLD_LOCAL, false),
+                        CommandVariant::LoadDylib(_) => (RTLD_NOW | RTLD_LOCAL, false),
+
+                        _ => unreachable!(),
+                    };
+
                     let name_offset = dylib.name as usize;
                     let dylib_name_ptr = unsafe {
                         base_addr
@@ -243,7 +219,12 @@ impl Task {
                             .unwrap_or("<invalid utf8>")
                     };
 
-                    dylibs.insert(name.to_string(), dylib_name_ptr.addr() as u64);
+                    let handle = unsafe { libc::dlopen(dylib_name_ptr, flags) };
+                    if handle.is_null() {
+                        panic!("failed to load dylib @ {handle:?}");
+                    }
+
+                    dylibs.push((name.to_string(), handle.addr() as u64));
                 }
 
                 _ => continue,
@@ -255,11 +236,6 @@ impl Task {
 
 /// Initialize the [`Task`] struct from a pointer and
 /// a len.
-///
-/// # Panics
-///
-/// If the mach o pointed to is malformed this function
-/// panics
 unsafe fn task_init(ptr: *const u8, len: usize) -> Task {
     if ptr.is_null() {
         panic!("image pointer is null");
@@ -284,7 +260,11 @@ unsafe fn task_init(ptr: *const u8, len: usize) -> Task {
 
             // Initialize the actual task now
             let mut task = task_init_from_macho(&macho, image);
+
             task.dylibs_search(&macho, image);
+
+            task.symbols_init(&macho);
+
             task
         }
         Ok(Mach::Fat(multi_arch)) => {
@@ -309,14 +289,9 @@ unsafe fn task_init(ptr: *const u8, len: usize) -> Task {
 /// the initial file that corresponds to this parsed
 /// `macho`.
 fn task_init_from_macho(macho: &MachO<'_>, image: &[u8]) -> Task {
-    // Compute the total virtual memory size spanned by all Mach-O segments.
-    //
-    // We first determine the lowest virtual address (min_addr) and the highest
+    // determine the lowest virtual address (min_addr) and the highest
     // virtual address (max_addr) occupied by any segment. The total size is
     // then calculated as the difference.
-    //
-    // If there are no segments, both min_addr and max_addr default to 0, and
-    // saturating_sub ensures vm_size is 0 rather than underflowing.
     let vm_size = {
         let min_addr = macho
             .segments
@@ -384,12 +359,6 @@ fn task_init_from_macho(macho: &MachO<'_>, image: &[u8]) -> Task {
 
             // Copy the segment data from the Mach-O image into the
             // corresponding location in the address space.
-            // This is effectively a direct memcpy from the original
-            // image into the mapped memory region for the segment.
-            // No memory protections are applied by this function. it
-            // simply writes the raw data to the correct offsets.
-            // Memory protections must be set separately after this
-            // step before the segment can be safely executed or accessed.
             unsafe {
                 copy_from_image(
                     image.as_ptr().add(fileoff as usize).addr() as u64,
@@ -414,7 +383,8 @@ fn task_init_from_macho(macho: &MachO<'_>, image: &[u8]) -> Task {
 
     Task {
         memory,
-        dylibs: HashMap::new(),
+        dylibs: Vec::new(),
+        symbols: Vec::new(),
         memory_size,
         segments,
         entry_point,
