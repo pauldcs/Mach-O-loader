@@ -1,0 +1,8 @@
+
+target create target/debug/loader
+
+settings set target.run-args /bin/ls
+
+b jumper.rs:33:9
+
+r
