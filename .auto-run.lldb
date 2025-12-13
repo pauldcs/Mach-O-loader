@@ -6,3 +6,9 @@ settings set target.run-args /bin/ls
 b jumper.rs:33:9
 
 r
+
+b 0x0000000400000960
+
+b 0x4000009cc
+
+b 0x4000043b0

@@ -175,7 +175,7 @@ impl Task {
                     panic!("failed to init: {name}");
                 }
 
-                symbols.push((name[1..name.len()].to_string(), new_pointer.addr() as u64));
+                symbols.push((name.to_string(), new_pointer.addr() as u64));
             }
         }
         self.symbols = symbols;

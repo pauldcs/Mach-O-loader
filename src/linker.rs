@@ -8,6 +8,32 @@ pub fn get_library_ordinal(n_desc: u32) -> u8 {
     ((n_desc >> 8) & 0xff) as u8
 }
 
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+/// Pointer Authenticate au random pointer
+///
+/// Signs the 'modifier' (`p`) with the key `context`.
+/// The instruction computes and inserting a Pointer Authentication Code for `p`
+/// and returns it signed.
+///
+/// https://developer.arm.com/documentation/ddi0602/2025-09/Base-Instructions/PACIA--PACIA1716--PACIASP--PACIAZ--PACIZA--Pointer-Authentication-Code-for-instruction-address--using-key-A-
+pub unsafe extern "C" fn pacia(p: u64, context: u64) -> u64 {
+    core::arch::naked_asm!("pacia x0, x1", "ret")
+}
+
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+/// Authenticate a pointer previously signed with `context`
+///
+/// The pointer that is authenticated must have been previously signed.
+/// If the authentication passes, the upper bits of the address are restored and
+/// the pointer is returned.
+///
+/// https://developer.arm.com/documentation/ddi0602/2025-09/Base-Instructions/AUTIA--AUTIA1716--AUTIASP--AUTIAZ--AUTIZA--Authenticate-instruction-address--using-key-A-
+pub unsafe extern "C" fn autia(p: u64, context: u64) -> u64 {
+    core::arch::naked_asm!("autia x0, x1", "ret")
+}
+
 #[derive(Debug, Default)]
 /// A dynamic linker
 pub struct Linker {}
