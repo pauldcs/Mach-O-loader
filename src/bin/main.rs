@@ -1,9 +1,17 @@
+use std::env;
 use std::fs;
 
 use loader::{Task, jumper::jumper, linker::Linker};
 
 fn main() {
-    let bin = "./binaries/hello_world_fprintf/hello_world";
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        panic!("invalid number of arguments");
+    }
+
+    let bin = &args[1];
+
     let data = fs::read(bin).unwrap_or_else(|e| {
         panic!("failed to read {bin}: {}", e);
     });
