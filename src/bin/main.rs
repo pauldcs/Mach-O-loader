@@ -18,11 +18,10 @@ fn main() {
 
     let mut task = unsafe { Task::with_pointer(data.as_ptr(), data.len()) };
 
-    task.segments_protect();
-
     let mut linker = Linker::new();
-
     linker.link_raw(&mut task);
+
+    task.segments_protect();
 
     jumper(task.memory, task.entry_point);
 }

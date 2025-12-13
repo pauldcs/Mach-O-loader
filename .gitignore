@@ -1,3 +1,5 @@
 target
 .DS_Store
 v1
+ptrauth/.objs
+ptrauth/libptrauth.a
